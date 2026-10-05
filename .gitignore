@@ -8,10 +8,10 @@ app/.cxx/
 local.properties
 *.iml
 .idea/
-dirtyfrag-lkm/*.cmd
-dirtyfrag-lkm/*.o
-dirtyfrag-lkm/*.mod
-dirtyfrag-lkm/*.mod.c
-dirtyfrag-lkm/*.lto.o
-dirtyfrag-lkm/modules.order
-dirtyfrag-lkm/Module.symvers
+lkm/*.cmd
+lkm/*.o
+lkm/*.mod
+lkm/*.mod.c
+lkm/*.lto.o
+lkm/modules.order
+lkm/Module.symvers

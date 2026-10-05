@@ -32,6 +32,7 @@ ${CMAKE_SOURCE_DIR}/ko/dirtyfrag-android14-6.1.ko;\
 ${CMAKE_SOURCE_DIR}/ko/dirtyfrag-android15-6.6.ko;\
 ${CMAKE_SOURCE_DIR}/ko/dirtyfrag-android16-6.12.ko;\
 ${CMAKE_SOURCE_DIR}/ko/dirtyfrag-android17-6.18.ko;\
+${CMAKE_SOURCE_DIR}/ko/dirtyfrag-android15-5.4.ko;\
 ${CMAKE_SOURCE_DIR}/splicehelper")
 
 target_link_libraries(exp log)

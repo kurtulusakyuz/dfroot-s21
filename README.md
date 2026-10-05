@@ -1,73 +1,72 @@
-> [!IMPORTANT]
-> If you want to use your own ksud binary, you must compile from my fork: https://github.com/diabl0w/KernelSU
+# DFRoot for S21 (SM-G991B, G991BXXSJHZC2)
 
-# DFRoot [DirtyFrag (CVE-2026-43284)]
+Ephemeral root for Samsung S21 (locked bootloader) via DirtyFrag (CVE-2026-43284),
+plus a working KernelSU stack. Based on [diabl0w/DFRoot](https://github.com/diabl0w/DFRoot)
+(`@diabl0w github/xda`); S21 port and everything below by the fork.
 
-The core of this code is fully credited to others. I merely combined ideas to make them all better 
-and added some small improvements/features. 
+<img src="docs/ss.jpeg" width="270" alt="KernelSU working">
 
-Credits:
-- Original PoC and various code: https://github.com/lsposed/lspromise
-- Selinux Permissive kernel modules and various code: https://github.com/polygraphene/DFReroot
-- Unprivileged XFRM socket method: https://github.com/combeng6th/DirtyInit
-
-## Features
-
-- Start on Boot
-- Automatic soft reboot 
-- RO Partition Protection
-- Hide Selinux Modifications in KSU
-- Shizuku not needed — regain root without WiFi!
+Target kernel: `5.4.242-30958140-abG991BXXSJHZC2` (Samsung o1s, Android 15).
+This is a **non-GKI** vendor kernel: no GKI symbols/ABI, trimmed kallsyms,
+CFI + PAC + RKP + DEFEX enforced. The LKM therefore resolves everything at
+runtime (custom symbol resolver), uses tracepoint + task_work instead of
+kprobes/text-patch, and never touches read-only tables. Expect per-firmware
+porting (addresses, vermagic) — nothing here is drop-in for other builds.
 
 > [!WARNING]
-> I am not responsible for any damage to your device.
+> No responsibility for damage. Reboot wipes root (LKM, no persistence).
 
-## Supported Devices
+## What was built on top
 
-Ephemeral root for Samsung devices (and possibly others) w/ locked bootloaders vulnerable to DirtyFrag (CVE-2026-43284) 
+- **Exploit → `sud` daemon** (`dfmod/sud.c`): stateless root shell over
+  `/dev/.sud`. Every app-side call is one `sh -c` fork with output in `/dev/dfOUT`.
+- **KernelSU LKM** (`kernel-ksu/`): su redirect + allowlist grant, throne/manager
+  fd-install, per-namespace apex CA injection, lazy module umount, SELinux-hide
+  hooks. Samsung KDP/RKP/DEFEX/CFI-safe (tracepoint + task_work only, no text patch).
+- **`mrun.sh`** (device: `/data/adb/ksu/mrun.sh`): Magisk-style module runner —
+  file-bind + dir-mirror mounts, CA staging, zygote/app-ns injection with verify,
+  `/system_ext/bin` su+busybox mirror for bare-`su` in every shell.
+- **`ksudshim.sh`**: manager-compatible `ksud` CLI over mrun (install/enable/
+  disable/uninstall/action). `feature save` and friends are stubs (no daemon).
+- **Manager** (`manager/`, versionCode 32601): release build,
+  Flash console for uninstall, apex refresh on open, dead settings greyed out
+  (classic-su, kernel-umount locked on, SELinux-hide without reboot toast).
+- **Boot chain**: BOOT_COMPLETED posts a full-screen notification only — exploit
+  and load run *exclusively* with the activity window open (background load =
+  panic/Odin risk). Foreground guard aborts `insmod` if the window closes.
 
-| KMI Version | Verified |
-|---|---|
-| android12-5.10 | Untested |
-| android13-5.10 | Untested |
-| android13-5.15 | Untested |
-| android14-5.15 | Untested |
-| android14-6.1 | Untested |
-| android15-6.6 | Yes |
-| android16-6.12 | Yes |
-| android17-6.18 | Untested |
+## Layout (self-contained clone)
 
-## How it works
+- `dfmod/` — stager sources.
+- `kernel-ksu/` — KernelSU LKM source. Build:
+  `S21_ROOT_OVERRIDE=/path/to/S21 bash scripts/build-kernelsu.sh KSU_GIT_VERSION=2601
+  KSU_EXPECTED_SIZE=0x2E8 KSU_EXPECTED_HASH=a86318b5… KSU_MANAGER_PACKAGE=me.weishu.kernelsu`
+- `manager/` — manager source (`KSU_MANAGER_VERSION_CODE=32601` release).
+- `scripts/` — kernel build wrappers (need sibling `toolchains/` +
+  `kernel-G991BXXSJHZC2` tree via `S21_ROOT_OVERRIDE`, plus `ANDROID_HOME` SDK/NDK).
+- `lkm/` — legacy DirtyFrag module sources.
+- External (NOT in repo): `toolchains/`, `kernel-G991BXXSJHZC2/`.
 
-The Android kernel decrypts AES-CBC ESP packets directly into the page cache of files open for `splice()`. By crafting `IV = AES_ECB_DEC(key, current_content) ⊕ desired_content`, any 16-byte-aligned block in a mapped shared library can be overwritten without write permission and without copy-on-write.
+## Flow
 
-The exploit uses this primitive to patch shellcode into `libc++.so` and `libc.so` in the kernel's page cache. The next privileged call to those functions runs the shellcode and installs KernelSU.
+Manual: open the app → **Launch Root** (exploit, window stays open) →
+**Load KernelSU** when rooted → mounts + services.
 
-### Exploit chain
-
-1. **IpSec transform** — App allocates a `UdpEncapsulationSocket` + SPI and builds an AES-CBC/HMAC-SHA256 ESP transform via `IpSecManager`.
-
-2. **splicehelper → crash_dump64** — helper binary spliced into `/apex/com.android.runtime/bin/crash_dump64` via the CBC primitive. `crash_dump64` can be called by unprivileged app with `type_transform` and gives read access to vendor library pages and splices them into a pipe so the parent can compute correct IVs. 
-
-3. **dirtyfrag.ko → libbinderdebug.so** — The kernel module is written into `/vendor/lib64/libbinderdebug.so` with `vendor_file` label that can be modprobe'd
-
-4. **libc++ hook** (runs in init, uid=0, tid=1) — entrypoint via createorphanprocess. patched with shellcode that forks, sets the child's SELinux exec context to `u:r:vendor_modprobe:s0`, and execs `/vendor/bin/modprobe`.
-
-5. **libc hook** (runs in vendor_modprobe, uid=0) — Shellcode patched into `__libc_init`. When vendor_modprobe starts:
-   - Calls `finit_module` to load dirtyfrag.ko
-   - Opens ksud from the app's memfd via `/proc/<pid>/fd/<n>`, copies to `/dev/.ksud` and `/data/system/ksud`
-   - Unshares mount namespace, bind-mounts `/dev/.ksud` over `/system/bin/logcat` (DEFEX bypass via trusted path)
-   - Forks and execs ksud through the bind-mounted path
-
-6. **KernelSU daemon launched** — libc/libc++ patches are restored and crash_dump64 is fadvised out of cache.
-
-## Usage
-
-Install KernelSU Manager (download & unzip manager file) from actions flow: 
-https://github.com/tiann/KernelSU/actions/runs/35973514328
+Autoboot: reboot → tap the DFRoot notification (let it open full-screen)
+→ window stays on → exploit → 2s settle → load KernelSU automatically.
+Same result, no taps. Background load never happens (panic/Odin guard).
 
 ```sh
 ./build.sh
 adb install -r dirtyfrag.apk
 ```
 
+## Known issues / limits
+
+- `su`/`busybox` must be called by absolute path or via PATH; relative `./su`
+  does not grant (resolver removed on purpose).
+- Root exec of `/data` binaries is killed by DEFEX — including busybox as root.
+  busybox works as shell; root work uses sh/toybox.
+- `feature save`, classic-su toggle: stubs/greyed (no ksud daemon).
+- No Zygisk (LSPosed etc. install but never inject).
+- No `overlayfs` tricks anywhere near `/system` (hardlockup → watchdog reset).

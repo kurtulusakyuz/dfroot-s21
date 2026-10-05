@@ -18,7 +18,7 @@
             android:id="@+id/toolbar"
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
-            android:title="DFRoot"
+            android:title="DFRoot for S21"
             app:subtitle="(@diabl0w  github/xda)"
             app:subtitleTextAppearance="@style/TextAppearance.Material3.LabelSmall" />
 
@@ -103,6 +103,25 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="Launch Root" />
+
+            <Button
+                android:id="@+id/btnKsu"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Load KernelSU" />
+
+            <EditText
+                android:id="@+id/shellInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="root shell command (stateless, ≤70 chars)"
+                android:singleLine="true" />
+
+            <Button
+                android:id="@+id/btnShell"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Run as root" />
 
             <com.google.android.material.materialswitch.MaterialSwitch
                 android:id="@+id/switchManualSoftReboot"
