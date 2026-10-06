@@ -154,7 +154,7 @@ inject_apex_cacerts() {
             need=1; break
         fi
     done
-    [ "$need" = 1 ] || return 0
+    [ "$need" = 1 ] || log "apex: no CA module present"
     [ -d /apex/com.android.conscrypt/cacerts ] || return 0
     log "apex cacerts inject"
     # Bind kaynagi hedef iskeletten cozulur; ayna baska ns'te yoktur.
@@ -171,12 +171,20 @@ inject_apex_cacerts() {
     done
     chmod 755 "$STAGE" 2>/dev/null
     chmod 644 "$STAGE"/*.0 2>/dev/null
-    # bayat temizligi: kaynakta olmayan isim staging'de kalmasin
-    # (kaldirilan modulun sertifikasi hayalet olurdu)
+    # bayat temizligi HER ZAMAN (need kontrolunden once): kaynakta
+    # olmayan isim staging'de kalmasin. Yoksa kaldirilan modulun
+    # sertifikasi bir sonraki inject'te dirilir (hayalet CA).
     for s in "$STAGE"/*.0; do
         [ -f "$s" ] || continue
         [ -f "/system/etc/security/cacerts/${s##*/}" ] || rm -f "$s"
     done
+    if [ "$need" != 1 ]; then
+        # CA modulu yok: apex baglarini her iskelekte sok (bayat
+        # gorunum kalmasin), staging daginikligini birakma.
+        log "apex: no CA modules, peeling"
+        peel_mount /apex/com.android.conscrypt/cacerts
+        return 0
+    fi
     mount -o bind "$STAGE" /apex/com.android.conscrypt/cacerts 2>/dev/null \
         && log "apex-bound in init"
     # zygote iskeleleri + calisan uygulamalar (modülün APP_PIDS döngüsü)
@@ -558,6 +566,14 @@ case "$1" in
         # (modul script'lerinin takipsiz bind'leri dahil)
         had_ca=0
         ls "$MODDIR/$2"/system/etc/security/cacerts/* 2>/dev/null | grep -q . && had_ca=1
+        # kaldirilan modulun sertifika isimleri (sonradan hayalet
+        # kontrolu icin; dizin silinmeden once alinir)
+        cafiles=""
+        if [ "$had_ca" = 1 ]; then
+            for c in "$MODDIR/$2"/system/etc/security/cacerts/*; do
+                [ -f "$c" ] && cafiles="$cafiles ${c##*/}"
+            done
+        fi
         sh "$0" unmount-one "$2"
         rm -rf "$MODDIR/$2" "$MIRRORDIR/$2"
         if [ "$had_ca" = 1 ]; then
@@ -571,6 +587,23 @@ case "$1" in
                 log "- Peeling shared cacerts binds"
                 peel_mount /system/etc/security/cacerts
                 peel_mount /apex/com.android.conscrypt/cacerts
+                # staging'i de temizle (inject'e kalmadan)
+                for b in $cafiles; do
+                    rm -f "/data/adb/ksu/cacerts-stage/$b" 2>/dev/null
+                done
+                # tmpfs inadi (uygulama acik dosya tutar): 3 tur dene
+                for try in 1 2 3; do
+                    left=0
+                    for b in $cafiles; do
+                        [ -f "/system/etc/security/cacerts/$b" ] && left=1
+                        [ -f "/apex/com.android.conscrypt/cacerts/$b" ] && left=1
+                    done
+                    [ "$left" = 0 ] && break
+                    log "- cacerts ghost persists, repeel ($try/3)"
+                    sleep 2
+                    peel_mount /system/etc/security/cacerts
+                    peel_mount /apex/com.android.conscrypt/cacerts
+                done
                 if grep -q "cacerts" /proc/mounts 2>/dev/null; then
                     log "- WARNING: stale cacerts binds remain (close apps using them, retry uninstall)"
                 fi
