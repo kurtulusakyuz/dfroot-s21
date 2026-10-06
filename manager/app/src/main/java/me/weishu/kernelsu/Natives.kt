@@ -73,6 +73,12 @@ object Natives {
     external fun setSuEnabled(enabled: Boolean): Boolean
 
     /**
+     * Apply a compiled sepolicy batch (see SepolicyCompiler).
+     * o1s: ksud has no `profile set-sepolicy`, Manager ioctls directly.
+     */
+    external fun setSepolicy(data: ByteArray): Boolean
+
+    /**
      * Kernel module umount can be disabled temporarily.
      *  0: disabled
      *  1: enabled

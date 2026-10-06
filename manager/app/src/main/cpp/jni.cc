@@ -335,6 +335,26 @@ Java_me_weishu_kernelsu_Natives_setSuEnabled(JNIEnv *env, jobject thiz, jboolean
     return set_su_enabled(enabled);
 }
 
+// o1s: derlenmis sepolicy grubu (Kotlin derler, bkz. SepolicyCompiler)
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_me_weishu_kernelsu_Natives_setSepolicy(JNIEnv *env, jobject thiz, jbyteArray data) {
+    if (!data) {
+        return JNI_FALSE;
+    }
+    jsize len = env->GetArrayLength(data);
+    if (len <= 0) {
+        return JNI_FALSE;
+    }
+    jbyte *buf = env->GetByteArrayElements(data, nullptr);
+    if (!buf) {
+        return JNI_FALSE;
+    }
+    int ret = set_sepolicy_batch(reinterpret_cast<uint8_t *>(buf), (size_t)len);
+    env->ReleaseByteArrayElements(data, buf, JNI_ABORT);
+    return ret >= 0 ? JNI_TRUE : JNI_FALSE;
+}
+
 extern "C"
 JNIEXPORT jboolean JNICALL
 Java_me_weishu_kernelsu_Natives_isKernelUmountEnabled(JNIEnv *env, jobject thiz) {

@@ -26,6 +26,8 @@
 #include "manager/manager_identity.h"
 #include <linux/task_work.h>
 #include <linux/slab.h>
+#include <linux/sched.h>
+#include <linux/rcupdate.h>
 #include "ksu_samsung_kdp.h"
 #include <linux/binfmts.h>
 #include <linux/dcache.h>
@@ -36,6 +38,7 @@
 #include "supercall/supercall.h"
 #include "hook/lsm_hook.h"
 #include "sulog/event.h"
+#include "feature/adb_root.h"
 #include "ksu.h"
 #include "util.h"
 
@@ -240,11 +243,11 @@ void ksu_su_grant_on_exec(struct pt_regs *regs, long id)
 	 * reads) + queue async worker. Violations wedge random CPUs in 15-20s
 	 * (RCNT 152-175 hardlockup series). */
 	if (id == __NR_execve || id == __NR_execveat)
-		pr_info("ksu grant chk: %s(%d) id=%ld\n", current->comm,
+		pr_debug("ksu grant chk: %s(%d) id=%ld\n", current->comm,
 			current_uid().val, id);
 	if (!ksu_is_allow_uid_for_current(current_uid().val))
 		return;
-	pr_info("ksu grant chk: allow ok\n");
+	pr_debug("ksu grant chk: allow ok\n");
 	if (id == __NR_execve)
 		fn = (const char __user *)PT_REGS_PARM1(regs);
 	else if (id == __NR_execveat)
@@ -253,7 +256,7 @@ void ksu_su_grant_on_exec(struct pt_regs *regs, long id)
 		return;
 	memset(path, 0, sizeof(path));
 	ret = ksu_b_probe_user_read(path, fn, sizeof(path));
-	pr_info("ksu grant chk: read=%ld path=%.16s\n", ret, path);
+	pr_debug("ksu grant chk: read=%ld path=%.16s\n", ret, path);
 	if (ret < 0 || path[0] != '/') {
 		/* Mutlak yol yoksa grant yok: AT_EMPTY_PATH/fd-exec ve
 		 * goreceli cagrilar standart akista kullanilmiyor
@@ -265,7 +268,24 @@ void ksu_su_grant_on_exec(struct pt_regs *regs, long id)
 	 * (ksud'ye yonlenir). Boylece adb shell 2000 acar, su ile
 	 * yukselinir. Manager bypass aynen duruyor. */
 	if (!is_uid_manager(current_uid().val)) {
-		if (strcmp(path, SU_BIN_PATH) &&
+		/* ADB Root (upstream fix uyarlamasi): bayrak acikken adbd'nin
+		 * dogurdugu /system/bin/sh'e grant ver. Yonlendirme RKP'de
+		 * olu oldugu icin grant yolu kullanilir (LD_PRELOAD APEX'te
+		 * etkisizdi). Ebeveyn adbd olmayan sh'ler etkilenmez. */
+		bool adb_shell = false;
+		if (ksu_adb_root_enabled() && strcmp(path, SH_PATH) == 0) {
+			struct task_struct *par;
+
+			rcu_read_lock();
+			par = rcu_dereference(current->real_parent);
+			adb_shell = par && strcmp(par->comm, "adbd") == 0;
+			rcu_read_unlock();
+			if (adb_shell)
+				pr_info("ksu adb grant: %s(%d) exec %s (adbd child)\n",
+					current->comm, current_uid().val, path);
+		}
+		if (!adb_shell &&
+		    strcmp(path, SU_BIN_PATH) &&
 		    strcmp(path, SU_ALIAS1) && strcmp(path, SU_ALIAS2) &&
 		    strcmp(path, SU_ALIAS3) &&
 		    strcmp(path, SULOG_DRAIN_PATH) && strcmp(path, KSUEV_PATH))

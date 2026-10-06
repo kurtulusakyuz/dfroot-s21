@@ -33,8 +33,10 @@ bool is_pr_build();
 using p_key_t = char[KSU_MAX_PACKAGE_NAME];
 
 bool set_app_profile(const app_profile *profile);
-
 int get_app_profile(app_profile *profile);
+
+// Sepolicy batch (o1s: ksud yok, Manager dogrudan ioctl yapar)
+int set_sepolicy_batch(const uint8_t *data, size_t len);
 
 // Su compat
 bool set_su_enabled(bool enabled);

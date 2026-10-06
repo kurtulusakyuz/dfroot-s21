@@ -337,7 +337,9 @@ private fun AppProfileInner(
                         if (templates.isNotEmpty()) {
                             val selected = profile.rootTemplate ?: templates[0]
                             val info = me.weishu.kernelsu.ui.viewmodel.getTemplateInfoById(selected)
-                            if (info != null && setSepolicy(selected, info.rules.joinToString("\n"))) {
+                            // o1s: bos kurallar derlenemez; atla (basari say)
+                            val rulesText = info?.rules?.joinToString("\n").orEmpty()
+                            if (info != null && (rulesText.isBlank() || setSepolicy(selected, rulesText))) {
                                 onProfileChange(
                                     profile.copy(
                                         rootUseDefault = false,

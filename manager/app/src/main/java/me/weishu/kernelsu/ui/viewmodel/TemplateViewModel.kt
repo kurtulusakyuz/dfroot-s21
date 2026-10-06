@@ -81,6 +81,8 @@ class TemplateViewModel(
 }
 
 fun getTemplateInfoById(id: String): me.weishu.kernelsu.data.model.TemplateInfo? {
+    // o1s: once yerlesiklere bak (ksud sablon komutlari yok)
+    me.weishu.kernelsu.data.model.BuiltinTemplates.byId(id)?.let { return it }
     return runCatching {
         me.weishu.kernelsu.data.model.TemplateInfo.fromJSON(JSONObject(getAppProfileTemplate(id)))
     }.onFailure {

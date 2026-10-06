@@ -58,7 +58,9 @@ fun TemplateConfigMaterial(
             onConfirm = { selected ->
                 val tid = selected.id
                 val templateInfo = getTemplateInfoById(tid)
-                if (templateInfo != null && setSepolicy(tid, templateInfo.rules.joinToString("\n"))) {
+                // o1s: bos kurallar derlenemez; atla (basari say)
+                val rulesText = templateInfo?.rules?.joinToString("\n").orEmpty()
+                if (templateInfo != null && (rulesText.isBlank() || setSepolicy(tid, rulesText))) {
                     onProfileChange(
                         profile.copy(
                             rootTemplate = tid,

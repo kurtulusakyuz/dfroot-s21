@@ -475,29 +475,28 @@ fun isSepolicyValid(rules: String?): Boolean {
 }
 
 fun getSepolicy(pkg: String): String {
-    val shell = getRootShell()
-    val result =
-        shell.newJob().add("${getKsuDaemonPath()} profile get-sepolicy $pkg").to(ArrayList(), null)
-            .exec()
-    Log.i(TAG, "code: ${result.code}, out: ${result.out}, err: ${result.err}")
-    return result.out.joinToString("\n")
-}
-
-fun setSepolicy(pkg: String, rules: String): Boolean {
-    val shell = getRootShell()
-    val result = shell.newJob().add("${getKsuDaemonPath()} profile set-sepolicy $pkg '$rules'")
-        .to(ArrayList(), null).exec()
-    Log.i(TAG, "set sepolicy result: ${result.code}")
-    return result.isSuccess
+    // o1s: ksudshim `profile` bilmiyor; hata metnini kural diye
+    // gosterme (derleyiciyi boguyordu) -> bos don.
+    return ""
 }
 
 fun listAppProfileTemplates(): List<String> {
+    // o1s: yerlesikler her zaman (ksud sablon komutlari yok).
+    // shim hata satirlarini ele (gecerli id degiller).
+    val builtin = me.weishu.kernelsu.data.model.BuiltinTemplates.all.map { it.id }
     val shell = getRootShell()
-    return shell.newJob().add("${getKsuDaemonPath()} profile list-templates").to(ArrayList(), null)
-        .exec().out
+    val remote = shell.newJob().add("${getKsuDaemonPath()} profile list-templates").to(ArrayList(), null)
+        .exec().out.filter {
+            Regex("""^([A-Za-z][A-Za-z\d_]*\.)*[A-Za-z][A-Za-z\d_]*$""").matches(it.trim())
+        }
+    return (builtin + remote).distinct()
 }
 
 fun getAppProfileTemplate(id: String): String {
+    // o1s: yerlesikse JSON'unu uret (ksud yok)
+    me.weishu.kernelsu.data.model.BuiltinTemplates.byId(id)?.let {
+        return it.toJSON().toString()
+    }
     val shell = getRootShell()
     return shell.newJob().add("${getKsuDaemonPath()} profile get-template '${id}'")
         .to(ArrayList(), null).exec().out.joinToString("\n")

@@ -156,6 +156,18 @@ bool set_app_profile(const app_profile *profile) {
     return ksuctl(KSU_IOCTL_SET_APP_PROFILE, &cmd) == 0;
 }
 
+// o1s: derlenmis sepol grubunu dogrudan ioctl'la uygular.
+// Donus: kernel success_cmd_count (>=0 ok) veya negatif errno.
+int set_sepolicy_batch(const uint8_t *data, size_t len) {
+    struct ksu_set_sepolicy_cmd cmd = {};
+    if (!data || !len) {
+        return -EINVAL;
+    }
+    cmd.data_len = len;
+    cmd.data = (uint64_t)(uintptr_t)data;
+    return ksuctl(KSU_IOCTL_SET_SEPOLICY, &cmd);
+}
+
 int get_app_profile(app_profile *profile) {
     struct ksu_get_app_profile_cmd cmd = {.profile = *profile};
     int ret = ksuctl(KSU_IOCTL_GET_APP_PROFILE, &cmd);

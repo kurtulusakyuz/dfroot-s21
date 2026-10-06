@@ -156,6 +156,29 @@ inject_apex_cacerts() {
     done
     [ "$need" = 1 ] || log "apex: no CA module present"
     [ -d /apex/com.android.conscrypt/cacerts ] || return 0
+    # hizli yol: zygote'lar staging nobetcisini goruyorsa her sey
+    # taze demektir (Manager acilisindaki firtinayi onler).
+    STAGE=/data/adb/ksu/cacerts-stage
+    sentinel=""
+    for f in "$STAGE"/*.0; do
+        [ -f "$f" ] && { sentinel=${f##*/}; break; }
+    done
+    if [ -n "$sentinel" ]; then
+        fresh=1
+        for d in /proc/[0-9]*; do
+            pid=${d#/proc/}
+            case "$pid" in *[!0-9]*) continue ;; esac
+            if is_zygote_ns "$pid"; then
+                if ! nsenter -m -t "$pid" -- ls "/apex/com.android.conscrypt/cacerts/$sentinel" >/dev/null 2>&1; then
+                    fresh=0; break
+                fi
+            fi
+        done
+        if [ "$fresh" = 1 ]; then
+            log "apex fresh, skipping"
+            return 0
+        fi
+    fi
     log "apex cacerts inject"
     # Bind kaynagi hedef iskeletten cozulur; ayna baska ns'te yoktur.
     # O yuzden GERCEK bir staging dizini kullan (modülün tmpdir yöntemi).

@@ -683,7 +683,9 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
         .cmd = KSU_IOCTL_SET_SEPOLICY,
         .name = "SET_SEPOLICY",
         .handler = do_set_sepolicy,
-        .perm_check = only_root
+        // o1s: ksud yok; Manager dogrudan cagirir (fd'li, guvenilir).
+        // REPORT_EVENT root kalir (ksuev grant ile yukselir).
+        .perm_check = manager_or_root
     },
     {
         .cmd = KSU_IOCTL_CHECK_SAFEMODE,

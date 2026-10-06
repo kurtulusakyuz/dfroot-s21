@@ -27,6 +27,7 @@ class TemplateRepositoryImpl : TemplateRepository {
             if (localTemplateIds.isEmpty() || sync) {
                 fetchRemoteTemplates()
             }
+            // o1s: yerlesikler listAppProfileTemplates icinde gelir
             listAppProfileTemplates().mapNotNull { getTemplateInfoById(it) }
         }
     }
