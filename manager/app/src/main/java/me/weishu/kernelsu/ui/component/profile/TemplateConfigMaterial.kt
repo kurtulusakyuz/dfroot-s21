@@ -58,7 +58,7 @@ fun TemplateConfigMaterial(
             onConfirm = { selected ->
                 val tid = selected.id
                 val templateInfo = getTemplateInfoById(tid)
-                // o1s: bos kurallar derlenemez; atla (basari say)
+                // o1s: blank rules cannot compile; skip (count as success)
                 val rulesText = templateInfo?.rules?.joinToString("\n").orEmpty()
                 if (templateInfo != null && (rulesText.isBlank() || setSepolicy(tid, rulesText))) {
                     onProfileChange(

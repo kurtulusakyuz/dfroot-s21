@@ -156,12 +156,17 @@ inject_apex_cacerts() {
     done
     [ "$need" = 1 ] || log "apex: no CA module present"
     [ -d /apex/com.android.conscrypt/cacerts ] || return 0
-    # hizli yol: zygote'lar staging nobetcisini goruyorsa her sey
-    # taze demektir (Manager acilisindaki firtinayi onler).
+    # Fast path: if zygotes see the MODULE cert, everything is
+    # fresh (avoids storms on Manager open).
+    # A stock name can NEVER be the sentinel (present in clean views).
     STAGE=/data/adb/ksu/cacerts-stage
     sentinel=""
-    for f in "$STAGE"/*.0; do
-        [ -f "$f" ] && { sentinel=${f##*/}; break; }
+    for mod in "$MODDIR"/*; do
+        [ -d "$mod" ] || continue
+        [ -f "$mod/disable" ] && continue
+        for c in "$mod"/system/etc/security/cacerts/*.0; do
+            [ -f "$c" ] && { sentinel=${c##*/}; break 2; }
+        done
     done
     if [ -n "$sentinel" ]; then
         fresh=1

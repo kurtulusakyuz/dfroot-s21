@@ -75,8 +75,9 @@ object Natives {
     /**
      * Apply a compiled sepolicy batch (see SepolicyCompiler).
      * o1s: ksud has no `profile set-sepolicy`, Manager ioctls directly.
+     * Returns kernel retcode (0+ ok, negative errno).
      */
-    external fun setSepolicy(data: ByteArray): Boolean
+    external fun setSepolicy(data: ByteArray): Int
 
     /**
      * Kernel module umount can be disabled temporarily.

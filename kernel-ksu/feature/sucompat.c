@@ -29,6 +29,7 @@
 #include <linux/sched.h>
 #include <linux/rcupdate.h>
 #include "ksu_samsung_kdp.h"
+#include "compat/samsung_defex.h"
 #include <linux/binfmts.h>
 #include <linux/dcache.h>
 #include <linux/fcntl.h>
@@ -65,6 +66,10 @@
 #define SU_ALIAS3 "/system_ext/bin/su"
 /* NOT: busybox aynada shell kullanimina aciktir ama ASLA grant
  * listesine girmez (busybox sh = sessiz root deligi olur). */
+/* ReZygisk binaries in the /system_ext mirror (same pattern as su:
+ * real file, grant suffices so DEFEX spares the blessed exec). */
+#define ZYGISK_MONITOR_PATH "/system_ext/bin/zygisk-ptrace64"
+#define ZYGISKD_PATH "/system_ext/bin/zygiskd64"
 /* sulog bosaltici: manager Sulog ekrani Runtime.exec ile calistirir
  * (non-root exec: DEFEX-safe). Driver fd + grant burada kurulur;
  * kendisi GET_SULOG_FD ile kuyrugu bosaltir. */
@@ -215,6 +220,33 @@ static void ksu_su_grant_task_work(struct callback_head *cb)
 	ksu_sulog_emit_grant_root(0, uid, euid, GFP_KERNEL);
 }
 
+/* ReZygisk daemons launch from root shells (services stage), where the
+ * allowlist denies and the full escape aborts ("already root", so no
+ * DEFEX sync happens). This bless-only worker performs just the DEFEX
+ * sync pre-image (same tail call the full escape ends with). Queued from
+ * the same tracepoint with the same timing that spares ALIAS3 su, so the
+ * protection lands identically. Only the two daemon paths use it. */
+static void ksu_zygisk_bless_task_work(struct callback_head *cb)
+{
+	kfree(cb);
+	pr_info("ksu zygisk bless: %s(%d)\n", current->comm, current_uid().val);
+	ksu_samsung_defex_sync_current();
+}
+
+static int ksu_zygisk_bless_async(void)
+{
+	struct callback_head *cb = kmalloc(sizeof(*cb), GFP_ATOMIC);
+
+	if (!cb)
+		return -ENOMEM;
+	init_task_work(cb, ksu_zygisk_bless_task_work);
+	if (ksu_b_task_work_add(current, cb, true)) {
+		kfree(cb);
+		return -ESRCH;
+	}
+	return 0;
+}
+
 /* Disaridan kuyruklanabilir grant (orn. setresuid re-grant): 16B
  * GFP_ATOMIC, task_work sleepable escape yapar. */
 int ksu_su_grant_current_async(void)
@@ -245,9 +277,6 @@ void ksu_su_grant_on_exec(struct pt_regs *regs, long id)
 	if (id == __NR_execve || id == __NR_execveat)
 		pr_debug("ksu grant chk: %s(%d) id=%ld\n", current->comm,
 			current_uid().val, id);
-	if (!ksu_is_allow_uid_for_current(current_uid().val))
-		return;
-	pr_debug("ksu grant chk: allow ok\n");
 	if (id == __NR_execve)
 		fn = (const char __user *)PT_REGS_PARM1(regs);
 	else if (id == __NR_execveat)
@@ -258,11 +287,23 @@ void ksu_su_grant_on_exec(struct pt_regs *regs, long id)
 	ret = ksu_b_probe_user_read(path, fn, sizeof(path));
 	pr_debug("ksu grant chk: read=%ld path=%.16s\n", ret, path);
 	if (ret < 0 || path[0] != '/') {
-		/* Mutlak yol yoksa grant yok: AT_EMPTY_PATH/fd-exec ve
-		 * goreceli cagrilar standart akista kullanilmiyor
-		 * (resolver kaldirildi). su daima mutlak yolla cagrilir. */
+		/* Absolute path required (resolver removed). su is always
+		 * invoked by absolute path. */
 		return;
 	}
+	/* ReZygisk daemons launch from root shells (services stage). The
+	 * allowlist denies uid 0 and the full escape aborts there, so queue
+	 * bless-only work (DEFEX sync pre-image, same trace timing that
+	 * spares ALIAS3 su). Only these two paths bypass the allowlist. */
+	if (current_uid().val == 0 &&
+	    (strcmp(path, ZYGISK_MONITOR_PATH) == 0 ||
+	     strcmp(path, ZYGISKD_PATH) == 0)) {
+		ksu_zygisk_bless_async();
+		return;
+	}
+	if (!ksu_is_allow_uid_for_current(current_uid().val))
+		return;
+	pr_debug("ksu grant chk: allow ok\n");
 	/* Standart akis (Magisk-vari): shell tek basina grant URETMEZ.
 	 * Grant yalnizca acik su cagrilarinda: SU_BIN, klasik aliaslar
 	 * (ksud'ye yonlenir). Boylece adb shell 2000 acar, su ile
@@ -288,6 +329,8 @@ void ksu_su_grant_on_exec(struct pt_regs *regs, long id)
 		    strcmp(path, SU_BIN_PATH) &&
 		    strcmp(path, SU_ALIAS1) && strcmp(path, SU_ALIAS2) &&
 		    strcmp(path, SU_ALIAS3) &&
+		    strcmp(path, ZYGISK_MONITOR_PATH) &&
+		    strcmp(path, ZYGISKD_PATH) &&
 		    strcmp(path, SULOG_DRAIN_PATH) && strcmp(path, KSUEV_PATH))
 			return;
 		/* sulog bosaltici: driver fd kur (kendi tarar) + asagida grant.
@@ -470,6 +513,8 @@ static int ksu_bprm_su_hook(struct linux_binprm *bprm)
 	ret = ksu_b_selinux_bprm_set_creds(bprm);
 	if (ret)
 		return ret;
+	/* NOTE: bprm hook never installs here (-22); root-launched daemon
+	 * blessing lives in the trace path (ksu_zygisk_bless_async). */
 	if (!ksu_is_allow_uid_for_current(current_uid().val))
 		return 0;
 	/* Standart akis: sadece acik su ikilisi grant uretir (SU_PATH

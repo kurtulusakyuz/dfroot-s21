@@ -51,6 +51,9 @@ class ModuleViewModel(
 
     companion object {
         private const val TAG = "ModuleViewModel"
+        // o1s: apex refresh runs once per app process; screen
+        // switches must not retrigger it (plus mrun fast-skips anyway).
+        private var apexRefreshedOnce = false
     }
 
     private data class ModuleUpdateSignature(
@@ -85,8 +88,12 @@ class ModuleViewModel(
 
     init {
         viewModelScope.launchSearchQueryCollector(searchQuery, ::applySearchText)
-        // o1s: zygote restart bayat apex baglari; sayfa acilisinda tazele
-        viewModelScope.launch(Dispatchers.IO) { refreshApexMounts() }
+        // o1s: stale apex binds after zygote restart; refresh once
+        // per process (mrun fast-skips when fresh).
+        if (!apexRefreshedOnce) {
+            apexRefreshedOnce = true
+            viewModelScope.launch(Dispatchers.IO) { refreshApexMounts() }
+        }
     }
 
     fun markNeedRefresh() {

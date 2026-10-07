@@ -336,23 +336,27 @@ Java_me_weishu_kernelsu_Natives_setSuEnabled(JNIEnv *env, jobject thiz, jboolean
 }
 
 // o1s: derlenmis sepolicy grubu (Kotlin derler, bkz. SepolicyCompiler)
+// Donus: kernel retcode (0+ ok: uygulanan kural sayisi; negatif errno).
 extern "C"
-JNIEXPORT jboolean JNICALL
+JNIEXPORT jint JNICALL
 Java_me_weishu_kernelsu_Natives_setSepolicy(JNIEnv *env, jobject thiz, jbyteArray data) {
     if (!data) {
-        return JNI_FALSE;
+        return -EINVAL;
     }
     jsize len = env->GetArrayLength(data);
     if (len <= 0) {
-        return JNI_FALSE;
+        return -EINVAL;
     }
     jbyte *buf = env->GetByteArrayElements(data, nullptr);
     if (!buf) {
-        return JNI_FALSE;
+        return -ENOMEM;
     }
     int ret = set_sepolicy_batch(reinterpret_cast<uint8_t *>(buf), (size_t)len);
+    if (ret < 0) {
+        ret = -errno;
+    }
     env->ReleaseByteArrayElements(data, buf, JNI_ABORT);
-    return ret >= 0 ? JNI_TRUE : JNI_FALSE;
+    return ret;
 }
 
 extern "C"

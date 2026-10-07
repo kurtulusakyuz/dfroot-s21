@@ -59,7 +59,7 @@ fun TemplateConfigMiuix(
                     if (index < 0 || index >= profileTemplates.size) return@OverlayDropdownPreference
                     val selected = profileTemplates[index]
                     val templateInfo = getTemplateInfoById(selected)
-                    // o1s: bos kurallar derlenemez; atla (basari say)
+                    // o1s: blank rules cannot compile; skip (count as success)
                     val rulesText = templateInfo?.rules?.joinToString("\n").orEmpty()
                     if (templateInfo != null && (rulesText.isBlank() || setSepolicy(selected, rulesText))) {
                         onProfileChange(

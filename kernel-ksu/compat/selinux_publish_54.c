@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/err.h>
 #include <linux/audit.h>
+#include <linux/cred.h>
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/magic.h>
@@ -8,7 +9,9 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <net/netlabel.h>
+#include "ksu.h"
 #include "security.h"
+#include "selinux/selinux.h"
 #include "avc.h"
 #include "avc_ss.h"
 #include "objsec.h"
@@ -133,23 +136,37 @@ int ksu_policy_54_publish(ksu_policy_t *snapshot)
         ret = -ENOMEM;
         goto destroy_prepared;
     }
-    file = filp_open("/sys/fs/selinux/load", O_WRONLY, 0);
-    if (IS_ERR(file)) {
-        ret = PTR_ERR(file);
-        goto free_retired;
+    file = NULL;
+    {
+        /* Manager (untrusted_app) cannot open selinuxfs load node and
+         * fails the load_policy check. Caller is already authorized by
+         * the ioctl perm (manager_or_root); perform open + check as ksu.
+         * Upstream ksud runs in KSU domain and passes trivially. */
+        const struct cred *saved = override_creds(ksu_cred);
+        file = filp_open("/sys/fs/selinux/load", O_WRONLY, 0);
+        if (IS_ERR(file)) {
+            ret = PTR_ERR(file);
+            revert_creds(saved);
+            goto free_retired;
+        }
+        ret = -EINVAL;
+        if (file_inode(file)->i_sb->s_magic != SELINUX_MAGIC) {
+            revert_creds(saved);
+            goto close_file;
+        }
+        fsi = file_inode(file)->i_sb->s_fs_info;
+        if (!fsi || fsi->sb != file_inode(file)->i_sb || fsi->state != KSU_DATA(KSU_SELINUX_STATE, selinux_state)) {
+            revert_creds(saved);
+            goto close_file;
+        }
+        mutex_lock(&fsi->mutex);
+        /* Match sel_write_load's explicit policy-load authorization check. */
+        ret = ksu_b_avc_has_perm(KSU_DATA(KSU_SELINUX_STATE, selinux_state), current_sid(), SECINITSID_SECURITY,
+                          SECCLASS_SECURITY, SECURITY__LOAD_POLICY, NULL);
+        revert_creds(saved);
+        if (ret)
+            goto unlock_fsi;
     }
-    ret = -EINVAL;
-    if (file_inode(file)->i_sb->s_magic != SELINUX_MAGIC)
-        goto close_file;
-    fsi = file_inode(file)->i_sb->s_fs_info;
-    if (!fsi || fsi->sb != file_inode(file)->i_sb || fsi->state != KSU_DATA(KSU_SELINUX_STATE, selinux_state))
-        goto close_file;
-    mutex_lock(&fsi->mutex);
-    /* Match sel_write_load's explicit policy-load authorization check. */
-    ret = ksu_b_avc_has_perm(KSU_DATA(KSU_SELINUX_STATE, selinux_state), current_sid(), SECINITSID_SECURITY,
-                      SECCLASS_SECURITY, SECURITY__LOAD_POLICY, NULL);
-    if (ret)
-        goto unlock_fsi;
     ss = KSU_DATA(KSU_SELINUX_STATE, selinux_state)->ss;
     ret = -EAGAIN;
     if (!ss)

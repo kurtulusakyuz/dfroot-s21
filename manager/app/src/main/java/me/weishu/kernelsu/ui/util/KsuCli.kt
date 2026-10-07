@@ -464,25 +464,22 @@ fun hasMagisk(): Boolean {
 }
 
 fun isSepolicyValid(rules: String?): Boolean {
-    if (rules == null) {
+    if (rules.isNullOrBlank()) {
         return true
     }
-    val shell = getRootShell()
-    val result =
-        shell.newJob().add("${getKsuDaemonPath()} sepolicy check '$rules'").to(ArrayList(), null)
-            .exec()
-    return result.isSuccess
+    // o1s: no ksud `sepolicy check`; the compiler decides validity.
+    return SepolicyCompiler.compile(rules) != null
 }
 
 fun getSepolicy(pkg: String): String {
-    // o1s: ksudshim `profile` bilmiyor; hata metnini kural diye
-    // gosterme (derleyiciyi boguyordu) -> bos don.
+    // o1s: ksudshim has no `profile`; never show its error text
+    // as rules (it choked the compiler) -> return empty.
     return ""
 }
 
 fun listAppProfileTemplates(): List<String> {
-    // o1s: yerlesikler her zaman (ksud sablon komutlari yok).
-    // shim hata satirlarini ele (gecerli id degiller).
+    // o1s: builtins always listed (ksud template cmds missing).
+    // Drop shim error lines (not valid ids).
     val builtin = me.weishu.kernelsu.data.model.BuiltinTemplates.all.map { it.id }
     val shell = getRootShell()
     val remote = shell.newJob().add("${getKsuDaemonPath()} profile list-templates").to(ArrayList(), null)
@@ -493,7 +490,7 @@ fun listAppProfileTemplates(): List<String> {
 }
 
 fun getAppProfileTemplate(id: String): String {
-    // o1s: yerlesikse JSON'unu uret (ksud yok)
+    // o1s: emit JSON for builtins (no ksud)
     me.weishu.kernelsu.data.model.BuiltinTemplates.byId(id)?.let {
         return it.toJSON().toString()
     }
