@@ -63,10 +63,7 @@ adb install -r dirtyfrag.apk
 
 ## Known issues / limits
 
-- `su`/`busybox` must be called by absolute path or via PATH; relative `./su`
-  does not grant (resolver removed on purpose).
 - Root exec of `/data` binaries is killed by DEFEX — including busybox as root.
   busybox works as shell; root work uses sh/toybox.
-- `feature save`, classic-su toggle: stubs/greyed (no ksud daemon).
 - No Zygisk (LSPosed etc. install but never inject).
 - No `overlayfs` tricks anywhere near `/system` (hardlockup → watchdog reset).
