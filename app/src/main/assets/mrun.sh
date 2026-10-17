@@ -35,6 +35,9 @@ peel_mount() {
     # $1 = hedef yol
     t="$1"
     [ -n "$t" ] || return 0
+    # hicbir yerde bagli degilse tum /proc + nsenter firtinasini atla
+    # (bolum-yeni oturumda bu donguler ~1-2 dk yiyordu).
+    is_mounted "$t" || return 0
     for i in 1 2 3 4 5 6; do
         timeout 5 umount "$t" 2>/dev/null || break
     done
@@ -118,6 +121,12 @@ ensure_path_su() {
     [ -f /data/adb/ksu/bin/busybox ] && {
         cp /data/adb/ksu/bin/busybox "$mdir"/busybox 2>/dev/null
         chmod 755 "$mdir"/busybox 2>/dev/null
+    }
+    # /data binary'leri root-exec'te DEFEX yer: system-yolu kopyasi ile
+    # calisabilir hale gelir (dpolicy_inject_paths bu yollari tanir).
+    [ -f /data/adb/ksu/bin/ksud ] && {
+        cp /data/adb/ksu/bin/ksud "$mdir"/ksud 2>/dev/null
+        chmod 755 "$mdir"/ksud 2>/dev/null
     }
     grep -q " /system_ext/bin " /proc/mounts 2>/dev/null || \
         dobind "$mdir" "/system_ext/bin" "__pathsu"
@@ -402,6 +411,7 @@ esac
 case "$1" in
     mounts)
         log "stage mounts"
+        MRUNT0=$(date +%s)
         # Idempotency: onceki calismanin tmpfs/bind artiklarini once
         # sok (modul script'leri her kostugunda katman yigar).
         # SIRA: once mount'lar (taban), sonra post-fs-data (modul
@@ -451,6 +461,7 @@ case "$1" in
             log "- Mounts verified OK"
         fi
         rm -f "$miss"
+        log "mounts elapsed $(( $(date +%s) - MRUNT0 ))s"
         ;;
     mount-one)
         # $2 = modid: sadece o modulun mount'lari + script'i
@@ -471,7 +482,9 @@ case "$1" in
         ;;
     services)
         log "stage services"
+        SRVT0=$(date +%s)
         each_module service.sh
+        log "services elapsed $(( $(date +%s) - SRVT0 ))s"
         ;;
     install)
         [ -n "$2" ] || { echo "usage: $0 install <zip>"; exit 1; }

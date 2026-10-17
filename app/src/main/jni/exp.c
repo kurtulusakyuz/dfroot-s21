@@ -67,6 +67,7 @@ static uint8_t  g_hmac_key[32];
 static int      g_icv_len;    /* auth truncation in bytes (128-bit → 16) */
 static uint32_t g_seq = 1;   /* monotonically increasing per-write */
 int             g_fast_mode;  /* boot: skip serve window + cleanup */
+volatile int    g_window_close; /* load flow bitti: pencereyi erken kapat */
 
 /* IV = AES256_ECB_DEC(key, old_content) XOR desired
  * When kernel CBC-decrypts: plaintext = AES_DEC(key, ciphertext) XOR IV
@@ -653,6 +654,14 @@ static int is_fresh(const char *p, time_t t0) {
     return stat(p, &st) == 0 && st.st_mtime >= t0;
 }
 
+/* loadKsu bitti: 300sn pencereyi erken kapat (Launch Root'un penceresine
+ * dokunmaz; bu baygi yalniz Java tarafindan set edilir). */
+JNIEXPORT void JNICALL
+Java_df_root_ExploitRunner_nativeCloseWindow(JNIEnv *env, jclass clz __attribute__((unused))) {
+    g_window_close = 1;
+    __sync_synchronize();
+}
+
 JNIEXPORT jint JNICALL
 Java_df_root_ExploitRunner_nativeRunAll(JNIEnv *env, jclass clz __attribute__((unused)),
                                                jobject reporter_obj,
@@ -779,12 +788,19 @@ Java_df_root_ExploitRunner_nativeRunAll(JNIEnv *env, jclass clz __attribute__((u
                  * at cleanup, so the daemon's lifetime = this window. Each
                  * RUN buys one ~5min root-shell session (reboot per session;
                  * poisoned files across reboot just auto-fire next boot).
-                 * Mine risk grows with window length; 300s is the trade. */
-                for (int w = 0; w < 10; w++) {
-                    REPORTLN("=== SHELL %ds: shell window open ===",
-                             300 - w * 30);
-                    sleep(30);
-                }
+                 * Mine risk grows with window length; 300s is the trade.
+                 * 1sn dilimler: g_window_close set edilirse (load flow'un
+                 * islemi bitti) pencere erken kapanir, cleanup hemen kosar. */
+                    int sec;
+                    for (sec = 0; sec < 300 && !g_window_close; sec++) {
+                        if (sec % 150 == 0)
+                            REPORTLN("=== SHELL %ds: shell window open%s ===",
+                                     300 - sec,
+                                     sec ? "" : "");
+                        sleep(1);
+                    }
+                    if (sec < 300 || g_window_close)
+                        REPORTLN("window closed early (load done, %ds)\n", sec);
                 }
                 goto done;
             }

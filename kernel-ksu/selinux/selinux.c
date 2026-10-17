@@ -40,6 +40,7 @@ void ksu_sync_blob_sizes(void)
 static u32 cached_su_sid __read_mostly = 0;
 static u32 cached_zygote_sid __read_mostly = 0;
 static u32 cached_init_sid __read_mostly = 0;
+static u32 cached_shell_sid __read_mostly = 0;
 u32 ksu_file_sid __read_mostly = 0;
 
 /* HZC2: string->sid resolution crashes core against our freshly-published
@@ -190,6 +191,14 @@ void cache_sid(void)
         pr_info("Cached init SID: %u\n", cached_init_sid);
     }
 
+    err = ksu_b_security_secid_to_secctx(SHELL_CONTEXT, strlen(SHELL_CONTEXT), &cached_shell_sid);
+    if (err) {
+        pr_warn("Failed to cache shell SID: %d\n", err);
+        cached_shell_sid = 0;
+    } else {
+        pr_info("Cached shell SID: %u\n", cached_shell_sid);
+    }
+
     err = ksu_b_security_secid_to_secctx(KSU_FILE_CONTEXT, strlen(KSU_FILE_CONTEXT), &ksu_file_sid);
     if (err) {
         pr_warn("Failed to cache ksu_file SID: %d\n", err);
@@ -251,6 +260,11 @@ bool is_zygote(const struct cred *cred)
 bool is_init(const struct cred *cred)
 {
     return is_sid_match(cred, cached_init_sid, INIT_CONTEXT);
+}
+
+bool is_shell_domain(void)
+{
+    return is_sid_match(current_cred(), cached_shell_sid, SHELL_CONTEXT);
 }
 
 void escape_to_root_for_adb_root(void)

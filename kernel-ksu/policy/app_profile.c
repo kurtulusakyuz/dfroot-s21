@@ -127,6 +127,7 @@ static void disable_seccomp(void)
 int escape_with_root_profile(void)
 {
     int ret = 0;
+    uid_t app_uid;
     struct cred *cred;
     struct task_struct *p = current;
     struct task_struct *t;
@@ -138,6 +139,10 @@ int escape_with_root_profile(void)
         pr_warn("prepare_creds failed!\n");
         return -ENOMEM;
     }
+
+    /* original (pre-escape) caller uid: drives the auto app-dir
+     * DEFEX whitelist injected at grant time */
+    app_uid = cred->uid.val;
 
     if (cred->euid.val == 0) {
         pr_warn("Already root, don't escape!\n");
@@ -205,6 +210,8 @@ int escape_with_root_profile(void)
         pr_err("Samsung KDP credential install failed: %d\n", ret);
         goto out_abort_creds;
     }
+    /* DEFEX sync + auto app-dir whitelist (pre-escape uid) */
+    ksu_dp_inject_app_dir(app_uid);
     ksu_samsung_defex_sync_current();
 
     disable_seccomp();

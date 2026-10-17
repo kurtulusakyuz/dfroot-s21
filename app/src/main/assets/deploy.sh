@@ -5,14 +5,18 @@
 S=/data/user_de/0/df.root
 D=/data/adb/ksu
 log() { echo "deploy: $1"; }
-cp "$S/mrun.sh" "$S/ksudshim.sh" "$D/" 2>/dev/null
-chmod 755 "$D/mrun.sh" "$D/ksudshim.sh" 2>/dev/null
+# Dizinler KOPYADAN ONCE (ilk kurulumda /data/adb yok; 2>/dev/null cp
+# hatalarini da yutar => mrun.sh ENOENT'un rapor edilen sekli).
 mkdir -p "$D/bin"
+cp "$S/mrun.sh" "$S/ksudshim.sh" "$D/" 2>/dev/null
+[ -f "$D/mrun.sh" ] || log "FAIL mrun.sh copy"
+chmod 755 "$D/mrun.sh" "$D/ksudshim.sh" 2>/dev/null
 cp "$S/su" "$D/bin/su" 2>/dev/null
 cp "$S/ksud" "$D/bin/ksud" 2>/dev/null
 cp "$S/ksudrain" "$D/bin/ksudrain" 2>/dev/null
 cp "$S/ksuev" "$D/bin/ksuev" 2>/dev/null
 cp "$S/busybox" "$D/bin/busybox" 2>/dev/null
+[ -f "$D/bin/su" ] || log "FAIL bin copies"
 chmod 755 "$D/bin/su" "$D/bin/ksud" "$D/bin/ksudrain" "$D/bin/ksuev" "$D/bin/busybox" 2>/dev/null
 chmod 755 "$D" "$D/bin" 2>/dev/null
 chmod 755 /data/adb 2>/dev/null

@@ -509,6 +509,8 @@ int handle_sepolicy(void __user *user_data, u64 data_len)
         return -EINVAL;
     }
 
+    pr_info("sepol: batch len=%llu\n", data_len);
+
     if (data_len > KSU_SEPOLICY_MAX_BATCH_SIZE) {
         return -E2BIG;
     }
@@ -585,8 +587,10 @@ int handle_sepolicy(void __user *user_data, u64 data_len)
 
 #ifdef CONFIG_KSU_S21_54
     ret = ksu_policy_54_publish(pol);
-    if (ret)
+    if (ret) {
+        pr_err("sepol: publish failed: %d\n", ret);
         goto out_drop_new_policy;
+    }
     ksu_destroy_sepolicy(pol);
 #else
     rcu_assign_pointer(selinux_state.policy, pol);

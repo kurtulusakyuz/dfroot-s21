@@ -18,6 +18,7 @@
 #include "hook/syscall_hook.h"
 #include "hook/syscall_event_bridge.h"
 #include "feature/adb_root.h"
+#include "compat/samsung_defex.h"
 #include "infra/symbol_resolver.h"
 
 static int ksu_handle_init_mark_tracker(const char __user **filename_user)
@@ -82,8 +83,14 @@ long __nocfi ksu_hook_execve(int orig_nr, const struct pt_regs *regs)
     if (static_branch_unlikely(&ksud_execve_key))
         ksu_execve_hook_ksud(regs);
 
-    if (current_euid().val == 0)
+    if (current_euid().val == 0) {
         pending_root_execve = ksu_sulog_capture_root_execve(*filename_user, argv_user, GFP_KERNEL);
+        /* JIT DEFEX whitelist: uid-0 exec of an unknown parent dir gets
+         * that dir injected as a dir-wildcard BEFORE the real execve
+         * (and thus before the safeplace rules_lookup) - idempotent
+         * (no-op when a wildcard ancestor already covers the path). */
+        ksu_dp_jit_execve(*filename_user);
+    }
 
     if (current->pid != 1 && current_is_init) {
         ksu_handle_init_mark_tracker(filename_user);
