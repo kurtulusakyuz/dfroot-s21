@@ -63,7 +63,5 @@ adb install -r dirtyfrag.apk
 
 ## Known issues / limits
 
-- Root exec of `/data` binaries is killed by DEFEX — including busybox as root.
-  busybox works as shell; root work uses sh/toybox.
-- No Zygisk (LSPosed etc. install but never inject).
+- No Zygisk (LSPosed etc. install but never inject).(It may work after the latest updates, should be tested.)
 - No `overlayfs` tricks anywhere near `/system` (hardlockup → watchdog reset).
