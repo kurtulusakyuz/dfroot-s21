@@ -26,7 +26,7 @@ int ksu_init_symbol_resolver();
  * KSU_CALL, which casts the result of the noinline ksu_sym_addr() call
  * to typeof(sym) — the header's OWN declaration, so the prototype is
  * exact by construction (zero transcription risk), and the cast source
- * is a call result (v82's proven inline-icall shape, no slowpath).
+ * is a call result (proven inline-icall shape, no slowpath).
  * DATA uses KSU_DATA (plain address use, CFI-free).
  * Rule: NEVER call a trimmed symbol directly; NEVER store function
  * pointers in globals/params (slowpath trap). */

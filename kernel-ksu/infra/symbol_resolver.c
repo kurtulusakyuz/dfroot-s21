@@ -56,11 +56,15 @@ struct ksu_lookup_symbol_ctx {
 
 /* Bootstrap scanner (df_self-proven on HZC2): kallsyms_lookup_name is NOT
  * exported, so resolve it by scanning for "kallsyms_lookup_name+0x0/"
- * via sprint_symbol (GPL-exported). noinline: keeps the v82 call-result
- * cast shape at every user. */
+ * via sprint_symbol (GPL-exported). noinline: keeps the call-result
+ * cast shape at every user. Pass 1 is a device-agnostic fixed-base sweep;
+ * pass 2 is the old per-build neighborhood fallback. */
 extern int sprint_symbol(char *buffer, unsigned long address);
 
+#define SCAN_KLN_TEXT_BASE	0xffffffc010000000UL
 #define SCAN_KLN_FILE	0xffffffc0102f860cUL
+#define SCAN_KLN_DOWN	(1UL << 20)
+#define SCAN_KLN_UP	(16UL << 20)
 static unsigned long ksu_scan_kln_addr;
 
 static int ksu_name_is(const char *buf, const char *want)
@@ -129,19 +133,44 @@ __nocfi void ksu_b_unregister_kretprobe(struct kretprobe *rp)
 noinline static unsigned long ksu_scan_kln(void)
 {
 	static char sbuf[256];
-	unsigned long a, j;
+	unsigned long a, j, found;
 
 	if (ksu_scan_kln_addr)
 		return ksu_scan_kln_addr;
-	for (a = SCAN_KLN_FILE - (1UL << 20);
-	     a < SCAN_KLN_FILE + (16UL << 20); a += 4) {
+	found = 0;
+	/* Pass 1 (device-agnostic): sweep the kernel text range from the
+	 * fixed base, same style as df_self v2 (proven across HZC2 boots,
+	 * deltas ~4-4.4MB). sprint_symbol reads the kallsyms table only,
+	 * so there is no way to fault. */
+	for (a = SCAN_KLN_TEXT_BASE;
+	     a < SCAN_KLN_TEXT_BASE + (64UL << 20); a += 4) {
 		for (j = 0; j < sizeof(sbuf); j++)
 			sbuf[j] = 0;
 		sprint_symbol(sbuf, a);
 		if (ksu_name_is(sbuf, "kallsyms_lookup_name")) {
-			ksu_scan_kln_addr = a;
+			found = a;
 			break;
 		}
+	}
+	/* Pass 2 (fallback): old per-build neighborhood scan. Only needed
+	 * if the fixed-base sweep missed (unusual text base). */
+	if (!found) {
+		for (a = SCAN_KLN_FILE - SCAN_KLN_DOWN;
+		     a < SCAN_KLN_FILE + SCAN_KLN_UP; a += 4) {
+			for (j = 0; j < sizeof(sbuf); j++)
+				sbuf[j] = 0;
+			sprint_symbol(sbuf, a);
+			if (ksu_name_is(sbuf, "kallsyms_lookup_name")) {
+				found = a;
+				break;
+			}
+		}
+	}
+	if (found) {
+		ksu_scan_kln_addr = found;
+		pr_info("ksu: kln scan hit %lx (text-base %lx, delta %ld)\n",
+			found, (unsigned long)SCAN_KLN_TEXT_BASE,
+			(long)(found - (unsigned long)SCAN_KLN_TEXT_BASE));
 	}
 	return ksu_scan_kln_addr;
 }
@@ -262,7 +291,7 @@ unsigned long __nocfi find_kernel_symbol_exact(const char *symbol_name)
     char *module_name = NULL;
     char buf[KSYM_SYMBOL_LEN];
     /* Bootstrap: kallsyms_lookup_name is NOT exported on HZC2 — resolve
-     * it via scan, call through a local (v82 inline shape). */
+     * it via scan, call through a local (inline shape). */
     unsigned long (*kln)(const char *) =
 	    (unsigned long (*)(const char *))ksu_scan_kln();
 

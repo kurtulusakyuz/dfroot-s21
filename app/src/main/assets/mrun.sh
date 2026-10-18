@@ -3,7 +3,7 @@
 # Kullanim: sh mrun.sh {mounts|services|mount-one <id>|install <zip>|
 #   install-dir <dir> [zip]|unmount|unmount-one <id>|enable|disable <id>|
 #   uninstall <id>|hint|boot}
-# Kurallar (saha kanitli):
+# Kurallar:
 # - overlay YASAK (2 hardlockup). Yeni dosya = dizin-ayna + dir-bind.
 # - root olarak script dosyasi DIREKT exec edilmez, hep `sh <dosya>`
 #   (DEFEX oldurur). Bu dosyanin kendisi de oyle cagrilir.

@@ -85,7 +85,7 @@ public class MainActivity extends AppCompatActivity implements IReporter {
             getSupportActionBar().setSubtitle("(@diabl0w github/xda)");
         }
 
-        // o1s v57+: same-boot reruns allowed (worker unlinks stale
+        // o1s: same-boot reruns allowed (worker unlinks stale
         // markers at start and re-arms atomically). Never gate on /dev/df.
         binding.btnRun.setEnabled(true);
 

@@ -22,8 +22,7 @@
 #include <signal.h>
 #include <string.h>
 
-/* v57: pure daemon (worker loads ko via grandchild first). */
-/* v57: pure daemon (worker loads ko via grandchild first). */
+/* pure daemon (worker loads ko via grandchild first). */
 #define SOCK_PATH "/dev/.sud"
 #define SHELL_PATH "/system/bin/sh"
 #define MARK_PATH "/dev/dfm0"

