@@ -39,7 +39,7 @@ porting (addresses, vermagic) — nothing here is drop-in for other builds.
 
 - `dfmod/` — stager sources.
 - `kernel-ksu/` — KernelSU LKM source. Build:
-  `S21_ROOT_OVERRIDE=/path/to/S21 bash scripts/build-kernelsu.sh KSU_GIT_VERSION=2601
+  `S21_ROOT_OVERRIDE=/path/to/S21 bash scripts/build-kernelsu.sh KSU_VERSION=32601
   KSU_EXPECTED_SIZE=0x2E8 KSU_EXPECTED_HASH=a86318b5… KSU_MANAGER_PACKAGE=me.weishu.kernelsu`
 - `manager/` — manager source (`KSU_MANAGER_VERSION_CODE=32601` release).
 - `scripts/` — kernel build wrappers (need sibling `toolchains/` +
